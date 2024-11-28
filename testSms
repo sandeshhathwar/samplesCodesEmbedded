@@ -1,0 +1,112 @@
+#define MAX_NUMBERS 5  // Maximum number of phone numbers to send messages to
+
+// Structure to hold phone number and message
+typedef struct {
+    char phoneNumber[15];  // Phone number string (e.g., +1234567890)
+    char message[160];     // Message content (SMS max length)
+} SMS_Info;
+
+// Define an array of SMS_Info to store multiple phone numbers and messages
+SMS_Info smsList[MAX_NUMBERS];
+int smsIndex = 0;  // Index to track where to store next message data
+
+// Flag to indicate when to send SMS
+volatile int sendSmsFlag = 0;
+
+
+void initializeSmsList(void) {
+    // Fill in phone numbers and messages for different scenarios
+    strcpy(smsList[0].phoneNumber, "+1234567890");
+    strcpy(smsList[0].message, "Message for PB0 triggered");
+
+    strcpy(smsList[1].phoneNumber, "+0987654321");
+    strcpy(smsList[1].message, "Message for PB1 triggered");
+
+    strcpy(smsList[2].phoneNumber, "+1122334455");
+    strcpy(smsList[2].message, "Message for PB2 triggered");
+
+    strcpy(smsList[3].phoneNumber, "+5566778899");
+    strcpy(smsList[3].message, "Message for PB3 triggered");
+
+    // Optionally add more numbers
+    // strcpy(smsList[4].phoneNumber, "+9988776655");
+    // strcpy(smsList[4].message, "Message for PB4 triggered");
+}
+void GPIO_Init(void) {
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+    // Enable GPIO port clock (Assuming PB pins are on GPIOB)
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+
+    // Configure PB0, PB1, PB2, PB3 as interrupt pins (both rising and falling edges)
+    GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_3;
+    GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;  // Interrupt on both edges
+    GPIO_InitStruct.Pull = GPIO_NOPULL;                 // No pull-up or pull-down
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+    // Enable and set priority for NVIC interrupts for each pin
+    HAL_NVIC_SetPriority(EXTI0_IRQn, 2, 0); // For PB0 (EXTI Line 0)
+    HAL_NVIC_EnableIRQ(EXTI0_IRQn);
+
+    HAL_NVIC_SetPriority(EXTI1_IRQn, 2, 0); // For PB1 (EXTI Line 1)
+    HAL_NVIC_EnableIRQ(EXTI1_IRQn);
+
+    HAL_NVIC_SetPriority(EXTI2_IRQn, 2, 0); // For PB2 (EXTI Line 2)
+    HAL_NVIC_EnableIRQ(EXTI2_IRQn);
+
+    HAL_NVIC_SetPriority(EXTI3_IRQn, 2, 0); // For PB3 (EXTI Line 3)
+    HAL_NVIC_EnableIRQ(EXTI3_IRQn);
+}
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+    if (GPIO_Pin == GPIO_PIN_0) {
+        // PB0 Trigger: Set the flag to send SMS to multiple numbers
+        sendSmsFlag = 1;
+        // You can decide which message number to send based on GPIO pin
+        smsIndex = 0;  // This sends the message to the first phone number in the list
+    } else if (GPIO_Pin == GPIO_PIN_1) {
+        sendSmsFlag = 1;
+        smsIndex = 1;  // Send message for PB1
+    } else if (GPIO_Pin == GPIO_PIN_2) {
+        sendSmsFlag = 1;
+        smsIndex = 2;  // Send message for PB2
+    } else if (GPIO_Pin == GPIO_PIN_3) {
+        sendSmsFlag = 1;
+        smsIndex = 3;  // Send message for PB3
+    }
+}
+void sendSms(SMS_Info *sms) {
+    // Send SMS command to the GSM module (SIM7600)
+    char atCommand[100];
+    snprintf(atCommand, sizeof(atCommand), "AT+CMGS=\"%s\"\r", sms->phoneNumber);
+    HAL_UART_Transmit(&huart1, (uint8_t*)atCommand, strlen(atCommand), HAL_MAX_DELAY);
+
+    // Wait for ">" prompt from SIM7600
+    HAL_UART_Transmit(&huart1, (uint8_t*)sms->message, strlen(sms->message), HAL_MAX_DELAY);
+
+    // Send Ctrl+Z to indicate the end of the message
+    uint8_t ctrlZ = 0x1A;
+    HAL_UART_Transmit(&huart1, &ctrlZ, 1, HAL_MAX_DELAY);
+}
+
+void sendMessages(void) {
+    // Send SMS to multiple numbers
+    for (int i = 0; i < MAX_NUMBERS; i++) {
+        sendSms(&smsList[i]);
+        HAL_Delay(1000);  // Delay between sending SMS
+    }
+}
+int main(void) {
+    HAL_Init();
+    SystemClock_Config();
+    GPIO_Init();
+    initializeSmsList();
+    UART_Init();  // Initialize UART for GSM communication
+
+    while (1) {
+        // If the SMS flag is set, send the message
+        if (sendSmsFlag) {
+            sendSmsFlag = 0;  // Clear the flag
+            sendMessages();   // Send the SMS to all numbers in the list
+        }
+    }
+}
