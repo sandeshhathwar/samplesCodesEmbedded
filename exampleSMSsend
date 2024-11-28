@@ -1,0 +1,132 @@
+
+#include "stm32f4xx_hal.h"
+
+#define UART_BUFFER_SIZE 256
+
+// SMS Details
+typedef struct {
+    char phoneNumber[16];
+    char message[160];
+} SmsMessage;
+
+// UART buffer for SIM7600
+uint8_t uartTxBuffer[UART_BUFFER_SIZE];
+uint8_t uartRxBuffer[UART_BUFFER_SIZE];
+volatile uint8_t uartTxComplete = 0;
+volatile uint8_t uartRxComplete = 0;
+
+// SMS-related variables
+volatile uint8_t sendSmsFlag = 0;
+SmsMessage smsToSend;
+
+// GPIO pin definitions
+#define GPIO_PIN_1_TRIGGER GPIO_PIN_0
+#define GPIO_PIN_2_TRIGGER GPIO_PIN_1
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+    if (GPIO_Pin == GPIO_PIN_1_TRIGGER) {
+        strcpy(smsToSend.phoneNumber, "+1234567890");  // Replace with actual number
+        strcpy(smsToSend.message, "Message from pin 1 triggered!");
+    } else if (GPIO_Pin == GPIO_PIN_2_TRIGGER) {
+        strcpy(smsToSend.phoneNumber, "+0987654321");  // Replace with actual number
+        strcpy(smsToSend.message, "Message from pin 2 triggered!");
+    } else {
+        return;
+    }
+
+    // Set flag to start SMS sending process
+    sendSmsFlag = 1;
+}
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
+    if (huart->Instance == USART1) {
+        uartTxComplete = 1;  // Transmission complete
+    }
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+    if (huart->Instance == USART1) {
+        uartRxComplete = 1;  // Reception complete
+    }
+}
+void SendSms(SmsMessage *sms) {
+    char atCommand[UART_BUFFER_SIZE];
+
+    // Step 1: Set SMS mode to text
+    sprintf(atCommand, "AT+CMGF=1\r\n");
+    HAL_UART_Transmit_IT(&huart1, (uint8_t *)atCommand, strlen(atCommand));
+    while (!uartTxComplete);  // Wait for transmission to complete
+    uartTxComplete = 0;
+    HAL_Delay(100);           // Short delay for response
+
+    // Step 2: Specify recipient's phone number
+    sprintf(atCommand, "AT+CMGS=\"%s\"\r\n", sms->phoneNumber);
+    HAL_UART_Transmit_IT(&huart1, (uint8_t *)atCommand, strlen(atCommand));
+    while (!uartTxComplete);  // Wait for transmission to complete
+    uartTxComplete = 0;
+    HAL_Delay(100);
+
+    // Step 3: Send the SMS content
+    HAL_UART_Transmit_IT(&huart1, (uint8_t *)sms->message, strlen(sms->message));
+    while (!uartTxComplete);  // Wait for transmission to complete
+    uartTxComplete = 0;
+    HAL_Delay(100);
+
+    // Step 4: Send Ctrl+Z (ASCII 0x1A) to finish the SMS
+    uint8_t ctrlZ = 0x1A;
+    HAL_UART_Transmit_IT(&huart1, &ctrlZ, 1);
+    while (!uartTxComplete);  // Wait for transmission to complete
+    uartTxComplete = 0;
+    HAL_Delay(1000);  // Allow time for the SIM7600 to process the SMS
+}
+int main(void) {
+    HAL_Init();
+    SystemClock_Config();
+    GPIO_Init();
+    UART_Init();
+
+    while (1) {
+        // Check if the SMS flag is set
+        if (sendSmsFlag) {
+            sendSmsFlag = 0;  // Clear the flag
+            SendSms(&smsToSend);  // Send the SMS
+        }
+
+        // Perform other background tasks, if needed
+    }
+}
+void GPIO_Init(void) {
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+    // Configure GPIO pin 1
+    GPIO_InitStruct.Pin = GPIO_PIN_1_TRIGGER;
+    GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    // Configure GPIO pin 2
+    GPIO_InitStruct.Pin = GPIO_PIN_2_TRIGGER;
+    GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    // Enable NVIC for GPIO interrupts
+    HAL_NVIC_SetPriority(EXTI0_IRQn, 2, 0);
+    HAL_NVIC_EnableIRQ(EXTI0_IRQn);
+    HAL_NVIC_SetPriority(EXTI1_IRQn, 2, 0);
+    HAL_NVIC_EnableIRQ(EXTI1_IRQn);
+}
+void UART_Init(void) {
+    huart1.Instance = USART1;
+    huart1.Init.BaudRate = 115200;
+    huart1.Init.WordLength = UART_WORDLENGTH_8B;
+    huart1.Init.StopBits = UART_STOPBITS_1;
+    huart1.Init.Parity = UART_PARITY_NONE;
+    huart1.Init.Mode = UART_MODE_TX_RX;
+    huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+    huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+
+    if (HAL_UART_Init(&huart1) != HAL_OK) {
+        // Initialization Error
+        Error_Handler();
+    }
+}
